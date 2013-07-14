@@ -32,7 +32,7 @@ void setoptions(int argc, char** argv, struct options * opt) {
     opt->smask = 32; //source MASK
     opt->family = 0;
     opt->mtu = 1200;
-    opt->interface = "eth1";
+    opt->interface = NULL;//"eth1";
 
 
 
