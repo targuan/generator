@@ -41,22 +41,20 @@
  * 
  */
 int sleeper;
-double pkt_sent;
-double speed_limit;
-struct timeval tv;
 int stop;
 
 static void * readliner(void * arg) {
 	char line[1024];
 	char c;
    	int i;
+        double *speed_limit = arg;
 	do{
 	    fgets(line,1024,stdin);
 	    i = atoi(line);
 
-	    if(i != 0)  speed_limit = i;
+	    if(i != 0)  *speed_limit = i;
 
-	    printf("%f\n",speed_limit);
+	    printf("%f\n",*speed_limit);
 	    c = line[0];
 	} while(c != 'q');
 }
@@ -74,8 +72,9 @@ double difftimeval(struct timeval x , struct timeval y)
     return diff/1000000;
 }
 
-void speed_calc()
+void speed_calc(double pkt_sent,double speed_limit, int *sleeper)
 {
+    static struct timeval tv = {0};
     struct timeval tv_old;
     double ellapsed;
     double speed;
@@ -90,16 +89,15 @@ void speed_calc()
 
     ellapsed = difftimeval(tv_old,tv);
 
-    speed = pkt_sent/ellapsed;
+    speed = (pkt_sent)/ellapsed;
 
     if(speed>speed_limit) {
-        sleeper--;
-        if(sleeper<1) sleeper = 1;
+        (*sleeper)--;
+        if((*sleeper)<1) (*sleeper) = 1;
     }
     else if(speed<speed_limit) {
-        sleeper++;
+        (*sleeper)++;
     }
-    pkt_sent = 0;
 }
 
 
@@ -119,6 +117,9 @@ int main(int argc, char** argv) {
     char * domain;
     struct writer_info wi;
     int pkt_len;
+    
+    double speed_limit;
+    double pkt_sent;
 
     
 
@@ -129,13 +130,11 @@ int main(int argc, char** argv) {
     pthread_t thread;
 
 
-    pthread_create(&thread,NULL,readliner,NULL);
+    pthread_create(&thread,NULL,readliner,&speed_limit);
 
     sleeper = 50;
     pkt_sent = 0;
     speed_limit = 50000;
-    tv.tv_sec = 0;
-    tv.tv_usec = 0;
     /**
      * 
      * headers
@@ -268,7 +267,8 @@ int main(int argc, char** argv) {
     }
     for (i = 0; i < opts.count; i++) {
 	if(pkt_sent >= sleeper) {
-		speed_calc();
+		speed_calc(pkt_sent,speed_limit, &sleeper);
+                pkt_sent = 0;
 		usleep(1);
 	}
         /**

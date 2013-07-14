@@ -53,12 +53,10 @@ void wclose(struct writer_info *wi) {
 int wwrite(struct writer_info *wi, u_char *packet, int len) {
     static struct pcap_pkthdr header = {0};
     if (wi->type == WI_PCAP) {
-        printf("WI_PCAP\n");
         header.caplen = header.len = len;
         //set_ts(&(header.ts), i, &opts);
         pcap_dump(wi->dumper, &header, packet);
     } else if (wi->type == WI_IF) {
-        printf("WI_IF\n");
         if (sendto(wi->sockfd, packet, len, 0, (struct sockaddr*) &(wi->socket_address), sizeof (struct sockaddr_ll)) < 0)
             perror("Send failed\n");
     }
