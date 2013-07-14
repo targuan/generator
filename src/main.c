@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <resolv.h>
-#include <pcap.h>
 #include <string.h>
 #include <sys/time.h>
 #include <net/ethernet.h>
@@ -19,16 +18,16 @@
 #include <sys/socket.h>
 #include <netinet/ether.h>
 #include <netpacket/packet.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 #include "etnernet.h"
 #include "options.h"
 #include "ip.h"
 #include "queries.h"
 #include "timer.h"
+#include "writer.h"
 
 #define UDP_HLEN	8
 #define UDP_HDR_LEN     UDP_HLEN
@@ -36,7 +35,7 @@
 #define IP_HDR_LEN      (ip->ihl * 4)
 #define IP6_HDR_LEN     (sizeof(struct ip6_hdr))
 
-#define PCAP_SNAPLEN 4096
+
 
 /*
  * 
@@ -93,9 +92,6 @@ void speed_calc()
 
     speed = pkt_sent/ellapsed;
 
-    //printf("ellapsed: %f s\tsent: %f packet\t %f pkts/s\ttarget: %f\tsleeper: %d\n",ellapsed,pkt_sent,speed,speed_limit,sleeper);
-
-
     if(speed>speed_limit) {
         sleeper--;
         if(sleeper<1) sleeper = 1;
@@ -108,13 +104,10 @@ void speed_calc()
 
 
 int main(int argc, char** argv) {
-    pcap_dumper_t *dumper;
-    pcap_t *p;
-    struct pcap_pkthdr header;
     u_char *packet;
     int i;
     uint32_t ck;
-    struct ifreq if_idx;
+    
     struct sockaddr *sin_src;
     struct sockaddr *sin_net;
     struct sockaddr *sin_dst;
@@ -124,9 +117,10 @@ int main(int argc, char** argv) {
     struct options opts;
     FILE* fp_domain;
     char * domain;
+    struct writer_info wi;
+    int pkt_len;
 
-    struct sockaddr_ll socket_address;
-    int sockfd;
+    
 
     int q_class;
     int q_type;
@@ -153,22 +147,15 @@ int main(int argc, char** argv) {
     u_char *dns;
     u_char dns_opt[] = {00, 00, 0x29, 0x08, 00, 00, 00, 00, 00, 00, 00};
     setoptions(argc, argv, &opts);
+    
+    
 
 
-    if ((sockfd = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW)) == -1) {
-        perror("socket");
-    }
+    
 
-    memset(&if_idx, 0, sizeof (struct ifreq));
-    strncpy(if_idx.ifr_name, opts.interface, IFNAMSIZ - 1);
-    if (ioctl(sockfd, SIOCGIFINDEX, &if_idx) < 0)
-        perror("SIOCGIFINDEX");
+    
 
-    socket_address.sll_ifindex = if_idx.ifr_ifindex;
-    socket_address.sll_halen = ETH_ALEN;
-
-    header.ts.tv_sec = 0;
-    header.ts.tv_usec = 0;
+    
 
     packet = calloc(sizeof (u_char) * 4096, 1);
     sin_src = calloc(sizeof (struct sockaddr_storage), 1);
@@ -270,20 +257,13 @@ int main(int argc, char** argv) {
     dns = (u_char *) (((void *) udp) + UDP_HDR_LEN);
 
 
-    p = pcap_open_dead(DLT_EN10MB, PCAP_SNAPLEN);
-    dumper = pcap_dump_open(p, opts.out_file_name);
-    if (dumper == NULL) {
-        fprintf(stderr, "Can't open output file\n");
-
-        pcap_close(p);
-        return 3;
-    }
+    wopen(&wi,&opts);
+    
     init_domain_file(&fp_domain, opts.in_file_name);
     if (fp_domain == NULL) {
         fprintf(stderr, "Can't open queries file\n");
-
-        pcap_dump_close(dumper);
-        pcap_close(p);
+        wclose(&wi);
+        
         return 4;
     }
     for (i = 0; i < opts.count; i++) {
@@ -321,14 +301,14 @@ int main(int argc, char** argv) {
         if (sin_net->sa_family == AF_INET) {
             ip->saddr = ((struct sockaddr_in *) sin_src)->sin_addr.s_addr;
             ip->tot_len = htons(sendsize + UDP_HDR_LEN + (ip->ihl * 4));
-            header.len = sendsize + UDP_HDR_LEN + (ip->ihl * 4) + ETHER_HDR_LEN;
+            pkt_len = sendsize + UDP_HDR_LEN + (ip->ihl * 4) + ETHER_HDR_LEN;
 
             ip->check = 0;
             ip->check = inet_cksum(ip, (ip->ihl * 4), 0);
         } else if (sin_net->sa_family == AF_INET6) {
             memcpy(&(ip6->ip6_src), &(((struct sockaddr_in6 *) sin_src)->sin6_addr), 16);
             ip6->ip6_plen = htons(sendsize + UDP_HDR_LEN);
-            header.len = sendsize + UDP_HDR_LEN + sizeof (struct ip6_hdr) +ETHER_HDR_LEN;
+            pkt_len = sendsize + UDP_HDR_LEN + sizeof (struct ip6_hdr) +ETHER_HDR_LEN;
 
             ps_hdr.src = ip6->ip6_src;
             ps_hdr.dst = ip6->ip6_dst;
@@ -340,22 +320,17 @@ int main(int argc, char** argv) {
         }
 
 
-        header.caplen = header.len;
-        if (header.len > opts.mtu) {
-            fprintf(stderr, "too long: %s needs %d MTU is %d\n", domain, header.len, opts.mtu);
+        
+        
+        if (pkt_len > opts.mtu) {
+            fprintf(stderr, "too long: %s needs %d MTU is %d\n", domain, pkt_len, opts.mtu);
         } else {
-            set_ts(&(header.ts), i, &opts);
-            pcap_dump(dumper, &header, packet);
-            //if (sendto(sockfd, packet, header.len, 0, (struct sockaddr*) &socket_address, sizeof (struct sockaddr_ll)) < 0)
-              //  printf("Send failed\n");
+            wwrite(&wi,packet,pkt_len);
         }
-        //free(domain);
 	pkt_sent++;
     }
 
-
-    pcap_dump_close(dumper);
-    pcap_close(p);
+    wclose(&wi);
     fclose(fp_domain);
 
     return (EXIT_SUCCESS);
