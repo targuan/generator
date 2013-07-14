@@ -176,7 +176,8 @@ int main(int argc, char** argv) {
     sin_dst = calloc(sizeof (struct sockaddr_storage), 1);
     sin_mask = calloc(sizeof (struct sockaddr_storage), 1);
     domain = calloc(sizeof (char) * 1024, 1);
-
+    //domain = NULL;
+    
     if (packet == NULL ||
             sin_src == NULL ||
             sin_net == NULL ||
@@ -294,7 +295,10 @@ int main(int argc, char** argv) {
          * 
          * DNS dynamic
          */
-        nextdomain(fp_domain, &domain, &q_type, &q_class);
+        if(nextdomain(fp_domain, &domain, &q_type, &q_class)) {
+            printf("Can't read next domain\n");
+            exit(1);
+        }
 
         sendsize = res_mkquery(QUERY, domain, q_class, q_type, NULL,
                 0, NULL, dns, PACKETSZ);
@@ -341,10 +345,11 @@ int main(int argc, char** argv) {
             fprintf(stderr, "too long: %s needs %d MTU is %d\n", domain, header.len, opts.mtu);
         } else {
             set_ts(&(header.ts), i, &opts);
-            //pcap_dump(dumper, &header, packet);
-            if (sendto(sockfd, packet, header.len, 0, (struct sockaddr*) &socket_address, sizeof (struct sockaddr_ll)) < 0)
-                printf("Send failed\n");
+            pcap_dump(dumper, &header, packet);
+            //if (sendto(sockfd, packet, header.len, 0, (struct sockaddr*) &socket_address, sizeof (struct sockaddr_ll)) < 0)
+              //  printf("Send failed\n");
         }
+        //free(domain);
 	pkt_sent++;
     }
 
